@@ -44,6 +44,7 @@ example_style = Style(
     "html, body { height: 100%; width: 100%; } h1 { color: #ccc; text-align: center } body { background-image: linear-gradient(to right bottom, oklch(0.424958 0.052808 253.972015), oklch(0.189627 0.038744 264.832977)); } .container { display: grid; place-content: center; } .time { padding: 2rem; border-radius: 8px; margin-top: 3rem; font-family: monospace, sans-serif; background-color: oklch(0.916374 0.034554 90.5157); color: oklch(0.265104 0.006243 0.522862 / 0.6); font-weight: 600; }"
 )
 
+dyn_routes = []
 
 @rt("/")
 async def index():
@@ -63,7 +64,7 @@ async def index():
                 ),
                 Button("press me",
                        {"data-on-click__once": "@get('/timeseries')"}),
-                Div(id="data")(
+                Div(id="data", cls="overflow-auto")(
                     H3("Data")
                 ),
             ),

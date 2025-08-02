@@ -16,6 +16,7 @@ python-fasthtml = "^0.12.22"
 datastar-py = "^0.6.3"
 pycapnp = "^2.0.0"
 zalfmas-common = "^0.1.22"
+monsterui = "^1.0.21"
 
 [build-system]
 requires = ["poetry-core"]
