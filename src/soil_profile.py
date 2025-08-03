@@ -22,6 +22,7 @@ from datastar_py.consts import ElementPatchMode
 import datastar_py
 
 app, rt = fast_app(
+    secret_key="your-secret-key-here",
     htmx=False,
     surreal=False,
     live=True,

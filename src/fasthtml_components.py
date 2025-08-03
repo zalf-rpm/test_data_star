@@ -4,7 +4,11 @@ from fasthtml import ft
 from fasthtml.common import *
 import json
 
-def ConnectToSturdyRef(id, add_id="add", on_add_url="", bookmarks=None):
+def ConnectToSturdyRef(id, prefix=None, bookmarks=None):
+    prefix = prefix or []
+    route_prefix = "/".join(prefix)
+    signal_prefix = ".".join(prefix)
+    id_prefix = "_".join(prefix)
     bookmarks = bookmarks or []
     return Article()(
         Div(cls="grid")(
@@ -13,11 +17,10 @@ def ConnectToSturdyRef(id, add_id="add", on_add_url="", bookmarks=None):
                    )(
                 *[Option(value=f"{b['sr']}")(b["petname"]) for b in bookmarks]
             ),
-            Button("Connect"),
-            Button("Edit"),
+            Button("Connect", data_on_click=f"@get('/{route_prefix}/srs/connect')"),
+            Button("Edit", data_on_click=f"@get('/{route_prefix}/srs/edit')"),
             Button("Add",
-                   id=f"{add_id}",
-                   data_on_click=f"@get('/{on_add_url}')"),
+                   data_on_click=f"@get('/{route_prefix}/srs/add')"),
         )
     )
 
@@ -126,6 +129,8 @@ def SoilProfileData(profile_data):
 
 def SoilService():
     return Div()(
+            ConnectToSturdyRef("soil_service_srs",
+                               on_add_url="add_sturdy_ref"),
             ConnectToSturdyRef("soil_service_srs",
                                on_add_url="add_sturdy_ref"),
             GeoPosPicker("geo_pos_picker"),
