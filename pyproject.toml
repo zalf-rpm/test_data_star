@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-zalfmas-capnp-schemas = "^0.1.27"
+zalfmas-capnp-schemas = "^0.1.29"
 hypercorn = "^0.17.3"
 pandas = "^2.3.1"
 polars = "^1.31.0"

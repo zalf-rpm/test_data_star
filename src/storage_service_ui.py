@@ -79,14 +79,18 @@ async def connect(request, session: dict):
                 cap = await con_man.try_connect(sr, cast_as=storage_capnp.Store)
                 user_data["cap"] = cap
                 user_data["id_to_container_cap"] = {}
-                return DatastarResponse(aios.chain(
-                    aios.iterate([
+                list_container_patches = [
+                    SSE.patch_elements(el,
+                                       selector="#containers",
+                                       mode=ElementPatchMode.APPEND)
+                    for el in await list_containers(cap, user_data["id_to_container_cap"])]
+                return DatastarResponse(
+                    itertools.chain([
                         SSE.patch_signals({"srConnected": True,
                                            "connectionInvalid": "false"}),
                         SSE.patch_elements(selector="#no_container_placeholder",
                                            mode=ElementPatchMode.REMOVE)
-                    ]),
-                    list_containers(cap, user_data["containers"]))
+                    ], list_container_patches)
                 )
             except capnp.KjException as e:
                 print(e)
@@ -97,48 +101,48 @@ async def connect(request, session: dict):
 
 
 async def list_containers(storage_service_cap, id_to_container_cap):
+    patches = []
     try:
         cs = (await storage_service_cap.listContainers()).containers
         for c in cs:
-            ci = await c.info()
-            id_to_container_cap[ci.id] = c
-            yield SSE.patch_elements(
+            id_to_container_cap[c.id] = c.container
+            patches.append(
                 Details(
-                    Summary(H4(ci.name), open=False),
-                    Article(id=f"{ci.id}")(
-                        P(ci.description)
-                    )
-                ),
-                selector="#containers",
-                mode=ElementPatchMode.APPEND
+                    Summary(H4(c.name),
+                            open=False,
+                            data_on_click=f"@get('/containers/{c.id}')"),
+                    Article(id=f"c_{c.id}")("-----")
+                )
             )
-            yield SSE.patch_elements(
-                Hr(),
-                selector="#containers",
-                mode=ElementPatchMode.APPEND
-            )
+            patches.append(Hr())
     except capnp.KjException as e:
         print(e)
+    return patches
 
 
-@app.get("/containers/{id}")
-async def get_container(request, session, id: str):
+@app.get("/containers/{container_id}")
+async def get_container(request, session, container_id: str):
     signals = await read_signals(request)
     user_id = session.get("user_id", None)
     if user_id:
         user_data = all_user_data[user_id]
-        if id in user_data.get("id_to_container_cap", {}):
-            c = user_data["id_to_container_cap"][id]
+        if container_id in user_data.get("id_to_container_cap", {}):
+            c = user_data["id_to_container_cap"][container_id]
             try:
                 entries = (await c.listEntries()).entries
-
+                return DatastarResponse(SSE.patch_elements(
+                    Table(cls="striped")(
+                        Thead(Tr(Th("Key"), Th("Value"), Th("Actions"))),
+                        Tbody(*[
+                            Tr(Td(e.key), Td("---"), Td(Button("Edit"), Button("Delete")))
+                            for e in entries
+                        ])
+                    ),
+                    selector=f"#c_{container_id}",
+                    mode=ElementPatchMode.INNER))
             except capnp.KjException as e:
                 print(e)
-
-    return DatastarResponse(
-        SSE.patch_signals({"srConnected": False,
-                           "connectionInvalid": "true"}),
-    )
+    return DatastarResponse()
 
 
 #@app.get("/add_sturdy_ref")
