@@ -105,13 +105,14 @@ async def list_containers(storage_service_cap, id_to_container_cap):
     try:
         cs = (await storage_service_cap.listContainers()).containers
         for c in cs:
-            id_to_container_cap[c.id] = c.container
+            container_c_id = f"c_{c.id}"
+            id_to_container_cap[container_c_id] = c.container
             patches.append(
                 Details(
                     Summary(H4(c.name),
                             open=False,
-                            data_on_click=f"@get('/containers/{c.id}')"),
-                    Article(id=f"c_{c.id}")("-----")
+                            data_on_click=f"@get('/containers/{container_c_id}')"),
+                    Article(id=f"{container_c_id}")("-----")
                 )
             )
             patches.append(Hr())
@@ -119,93 +120,143 @@ async def list_containers(storage_service_cap, id_to_container_cap):
         print(e)
     return patches
 
-
-@app.get("/containers/{container_id}")
-async def get_container(request, session, container_id: str):
-    signals = await read_signals(request)
-    user_id = session.get("user_id", None)
+css_id_count = {"count": 0}
+def get_css_id_from_user_data(user_id, long_id: str):
     if user_id:
         user_data = all_user_data[user_id]
-        if container_id in user_data.get("id_to_container_cap", {}):
-            c = user_data["id_to_container_cap"][container_id]
-            try:
-                entries = (await c.listEntries()).entries
-                return DatastarResponse(SSE.patch_elements(
-                    Table(cls="striped")(
-                        Thead(Tr(Th("Key"), Th("Value"), Th("Actions"))),
-                        Tbody(*[
-                            Tr(Td(e.key), Td("---"), Td(Button("Edit"), Button("Delete")))
-                            for e in entries
-                        ])
-                    ),
-                    selector=f"#c_{container_id}",
-                    mode=ElementPatchMode.INNER))
-            except capnp.KjException as e:
-                print(e)
+        css_ids = user_data.setdefault("css_ids", {})
+        if long_id in css_ids:
+            return css_ids[long_id]
+        else:
+            css_id_count["count"] += 1
+            css_ids[long_id] = f"id_{css_id_count['count']}"
+            return css_ids[long_id]
+    return None
+
+
+def get_container_from_user_data(user_id, container_c_id):
+    if user_id:
+        user_data = all_user_data[user_id]
+        if container_c_id in user_data.get("id_to_container_cap", {}):
+            return user_data["id_to_container_cap"][container_c_id]
+    return None
+
+@app.get("/containers/{container_c_id}")
+async def get_container(request, session, container_c_id: str):
+    signals = await read_signals(request)
+    user_id = session.get("user_id", None)
+    container = get_container_from_user_data(user_id, container_c_id)
+    if not container: return DatastarResponse()
+
+    try:
+        entries = (await container.listEntries()).entries
+        rows = []
+        for entry in entries:
+            css_id = get_css_id_from_user_data(user_id, f"{container_c_id}.e_{entry.key}")
+            rows.append(
+                Tr()(
+                    Td(entry.key),
+                    Td(id=f"{css_id}")("---"),
+                    Td()(
+                        Button("Edit", data_on_click=f"@get('/containers/{container_c_id}/entries/e_{entry.key}')"),
+                        Button("Delete", data_on_click=f"@delete('/containers/{container_c_id}/entries/e_{entry.key}')")
+                    )
+                )
+            )
+        return DatastarResponse(SSE.patch_elements(
+            Table(cls="striped")(
+                Thead(Tr(Th("Key"), Th("Value"), Th("Actions"))),
+                Tbody(*rows)
+            ),
+            selector=f"#{container_c_id}",
+            mode=ElementPatchMode.INNER
+        ))
+    except capnp.KjException as e:
+        print(e)
     return DatastarResponse()
 
 
-#@app.get("/add_sturdy_ref")
-#async def add_sturdy_ref(request):
-#    signals = await read_signals(request)
-#    print(signals)
-#    return DatastarResponse(SSE.patch_elements(
-#        c.AddSturdyRef(),
-#        selector="body",
-#        mode=ElementPatchMode.PREPEND,
-#    ))
+@app.get("/containers/{container_c_id}/entries/{entry_e_key}")
+async def get_entry(request, session, container_c_id: str, entry_e_key: str):
+    signals = await read_signals(request)
+    user_id = session.get("user_id", None)
+    container = get_container_from_user_data(user_id, container_c_id)
+    if not container: return DatastarResponse()
 
-#dyn_routes.append(c.new_sturdy_ref_handler(app, route="/add_sturdy_ref"))
-#c.new_sturdy_ref_handler(app, route="/add_sturdy_ref")
+    try:
+        v = await container.getEntry(entry_e_key).entry.getValue()
+        css_id = get_css_id_from_user_data(user_id, f"{container_c_id}.{entry_e_key}")
+        return DatastarResponse(SSE.patch_elements(
+            storage_input_field(container_c_id, entry_e_key,
+                                f"/containers/{container_c_id}/entries/{entry_e_key}",
+                                v.value),
+            selector=f"#{css_id}",
+            mode=ElementPatchMode.INNER
+        ))
+    except capnp.KjException as e:
+        print(e)
+    return DatastarResponse()
 
-#@app.delete("/add_sturdy_ref")
-#async def add_sturdy_ref(request):
-#    signals = await read_signals(request)
-#    print(signals)
-#    return DatastarResponse(SSE.patch_elements(
-#        selector="#add_sr_dialog",
-#        mode=ElementPatchMode.REMOVE,
-#    ))
+@app.put("/containers/{container_c_id}/entries/{entry_e_key}/{value_type}")
+async def get_entry(request, session, container_c_id: str, entry_e_key: str, value_type: str):
+    signals = await read_signals(request)
+    new_value = signals.get(container_c_id, {}).get(entry_e_key, None)
+    if not new_value: return DatastarResponse()
 
-#@app.get("/updates")
-#async def updates(request):
-#    signals = await read_signals(request)
-#    print(signals)
-#    return DatastarResponse(clock())
+    user_id = session.get("user_id", None)
+    container = get_container(user_id, container_c_id)
+    if not container: return DatastarResponse()
 
-#con_man = mas_common.ConnectionManager()
-#async def timeseries2():
-#    sr = "capnp://localhost:8888/timeseries"
-#    ts = await con_man.connect(sr, cast_as=climate_capnp.TimeSeries)
-#    header = await ts.header()
-#    for h in header.header:
-#        yield SSE.patch_elements(Div(h),
-#                                 selector="#headers",
-#                                 mode=ElementPatchMode.APPEND)
-#        #await asyncio.sleep(1)
-#    data = await ts.data()
-#    yield SSE.patch_elements(
-#        Div(id="data")(
-#            Table(cls="striped")(
-#                Thead(*[Th(str(h), scope="col") for h in header.header]),
-#                Tbody(id="tbody")
-#            )
-#        )
-#    )
-#    for d in data.data:
-#        row = []
-#        for i, _ in enumerate(header.header):
-#            row.append(Td(d[i]))
-#        yield SSE.patch_elements(Tr(*row),
-#                                 selector="#tbody",
-#                                 mode=ElementPatchMode.APPEND)
+    try:
+        entry_prom = container.getEntry(entry_e_key).entry
+        success = await entry_prom.setValue({value_type: new_value})
+    except capnp.KjException as e:
+        print(e)
+    return DatastarResponse()
 
 
-#@app.get("/timeseries")
-#async def timeseries(request):
-#    signals = await read_signals(request)
-#    print(signals)
-#    return DatastarResponse(timeseries2())
+def storage_input_field(container_c_id, entry_e_key, update_route: str,
+                        stor_val: storage_capnp.Store.Container.Entry.Value):
+    val_type = stor_val.which()
+    if val_type == "boolValue":
+        return Input(type="checkbox",
+                     data_signals=f"{{'{container_c_id}.{entry_e_key}.boolValueInvalid': false}}",
+                     data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.boolValueInvalid}}",
+                     data_bind=f"{container_c_id}.{entry_e_key}.boolValue",
+                     data_on_change=f"@put('{update_route}/boolValue')")
+    elif val_type == "int8Value":
+        return Input(type="number",
+                     min=-2**7,
+                     max=2**7 - 1,
+                     data_signals=f"{{'{container_c_id}.{entry_e_key}.int8ValueInvalid': false}}",
+                     data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.int8ValueInvalid}}",
+                     data_bind=f"{container_c_id}.{entry_e_key}.int8Value",
+                     data_on_change=f"@put('{update_route}/int8Value')")
+    elif val_type == "uint8Value":
+        return Input(type="number",
+                     min=0,
+                     max=2 ** 8 - 1,
+                     data_signals=f"{{'{container_c_id}.{entry_e_key}.uint8ValueInvalid': false}}",
+                     data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.uint8ValueInvalid}}",
+                     data_bind=f"{container_c_id}.{entry_e_key}.uint8Value",
+                     data_on_change=f"@put('{update_route}/uint8Value')")
+    elif val_type == "int16Value":
+        return Input(type="number",
+                     min=-2**15,
+                     max=2**15 - 1,
+                     data_signals=f"{{'{container_c_id}.{entry_e_key}.int16ValueInvalid': false}}",
+                     data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.int16ValueInvalid}}",
+                     data_bind=f"{container_c_id}.{entry_e_key}.int16Value",
+                     data_on_change=f"@put('{update_route}/int16Value')")
+    elif val_type == "uint16Value":
+        return Input(type="number",
+                     min=0,
+                     max=2**16 - 1,
+                     data_signals=f"{{'{container_c_id}.{entry_e_key}.uint16ValueInvalid': false}}",
+                     data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.uint16ValueInvalid}}",
+                     data_bind=f"{container_c_id}.{entry_e_key}.uint16Value",
+                     data_on_change=f"@put('{update_route}/uint16Value')")
+    return Input()
 
 if __name__ == "__main__":
     #via uvicorn
