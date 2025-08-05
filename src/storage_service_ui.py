@@ -153,13 +153,20 @@ async def get_container(request, session, container_c_id: str):
         rows = []
         for entry in entries:
             css_id = get_css_id_from_user_data(user_id, f"{container_c_id}.e_{entry.key}")
+            entry_e_key = f"e_{entry.key}"
+            sigs = {container_c_id: {
+                entry_e_key: {
+                    "idForEdit": f"edit_{css_id}",
+                    "idForDelete": f"delete_{css_id}",
+                }
+            }}
             rows.append(
-                Tr()(
+                Tr(id=f"delete_{css_id}", data_signals=json.dumps(sigs))(
                     Td(entry.key),
-                    Td(id=f"{css_id}")("---"),
+                    Td(id=f"edit_{css_id}")("---"),
                     Td()(
-                        Button("Edit", data_on_click=f"@get('/containers/{container_c_id}/entries/e_{entry.key}')"),
-                        Button("Delete", data_on_click=f"@delete('/containers/{container_c_id}/entries/e_{entry.key}')")
+                        Button("Edit", data_on_click=f"@get('/containers/{container_c_id}/entries/{entry_e_key}')"),
+                        Button("Delete", data_on_click=f"@delete('/containers/{container_c_id}/entries/{entry_e_key}')")
                     )
                 )
             )
@@ -179,9 +186,10 @@ async def get_container(request, session, container_c_id: str):
 @app.get("/containers/{container_c_id}/entries/{entry_e_key}")
 async def get_entry(request, session, container_c_id: str, entry_e_key: str):
     signals = await read_signals(request)
+    sigs = signals.get(container_c_id, {}).get(entry_e_key, {})
     user_id = session.get("user_id", None)
     container = get_container_from_user_data(user_id, container_c_id)
-    if not container: return DatastarResponse()
+    if not container or "idForEdit" not in sigs: return DatastarResponse()
 
     try:
         v = await container.getEntry(entry_e_key).entry.getValue()
@@ -190,7 +198,7 @@ async def get_entry(request, session, container_c_id: str, entry_e_key: str):
             storage_input_field(container_c_id, entry_e_key,
                                 f"/containers/{container_c_id}/entries/{entry_e_key}",
                                 v.value),
-            selector=f"#{css_id}",
+            selector=f"#{sigs['idForEdit']}",
             mode=ElementPatchMode.INNER
         ))
     except capnp.KjException as e:
