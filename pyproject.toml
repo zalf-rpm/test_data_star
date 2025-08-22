@@ -1,24 +1,25 @@
-[tool.poetry]
+[project]
 name = "test-data-star"
 version = "0.1.0"
 description = ""
-authors = ["Michael Berg-Mohnicke <michael.berg@zalf.de>"]
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = "^3.10"
-zalfmas-capnp-schemas = "^0.1.29"
-hypercorn = "^0.17.3"
-pandas = "^2.3.1"
-polars = "^1.31.0"
-great-tables = "^0.18.0"
-python-fasthtml = "^0.12.22"
-datastar-py = "^0.6.3"
-pycapnp = "^2.0.0"
-zalfmas-common = "^0.1.22"
-monsterui = "^1.0.21"
-aiostream = "^0.7.0"
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "Michael Berg-Mohnicke", email = "michael.berg@zalf.de" }]
+dependencies = [
+    "hypercorn(>=0.17.3)",
+    "pandas(>=2.3.1)",
+    "polars(>=1.31.0)",
+    "great-tables(>=0.18.0)",
+    "python-fasthtml(>=0.12.22)",
+    "datastar-py(>=0.6.3)",
+    "pycapnp(>=2.0.0)",
+    "monsterui(>=1.0.21)",
+    "aiostream(>=0.7.0)",
+    "zalfmas-common (>=0.1.22,<0.2.0)",
+    "zalfmas-capnp-schemas (>=0.1.29,<0.2.0)",
+    "poetry-core (>=2.0.0)",
+]
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"

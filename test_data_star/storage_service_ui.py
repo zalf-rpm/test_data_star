@@ -18,6 +18,9 @@ from fasthtml.common import *
 from fasthtml import ft
 import uvicorn
 
+from hypercorn.asyncio import serve as hc_serve
+from hypercorn.config import Config as HcConfig
+
 from datastar_py.fasthtml import DatastarResponse, ServerSentEventGenerator as SSE, read_signals
 from datastar_py.consts import ElementPatchMode
 import datastar_py
@@ -26,7 +29,7 @@ app, rt = fast_app(
     secret_key="your-secret-key-here",
     htmx=False,
     surreal=False,
-    live=True,
+    live=False,
     hdrs=(
         #Theme.blue.headers(highlightjs=True),
         Script(
@@ -192,7 +195,7 @@ async def get_entry(request, session, container_c_id: str, entry_e_key: str):
     if not container or "idForEdit" not in sigs: return DatastarResponse()
 
     try:
-        v = await container.getEntry(entry_e_key).entry.getValue()
+        v = await container.getEntry(entry_e_key[2:]).entry.getValue()
         css_id = get_css_id_from_user_data(user_id, f"{container_c_id}.{entry_e_key}")
         return DatastarResponse(SSE.patch_elements(
             storage_input_field(container_c_id, entry_e_key,
@@ -227,58 +230,72 @@ def storage_input_field(container_c_id, entry_e_key, update_route: str,
                         stor_val: storage_capnp.Store.Container.Entry.Value):
     val_type = stor_val.which()
     if val_type == "boolValue":
+        sigs = {container_c_id: {entry_e_key: {"boolValueInvalid": False, "boolValue": stor_val.boolValue}}}
         return Input(type="checkbox",
-                     data_signals=f"{{'{container_c_id}.{entry_e_key}.boolValueInvalid': false}}",
+                     data_signals=json.dumps(sigs),
                      data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.boolValueInvalid}}",
                      data_bind=f"{container_c_id}.{entry_e_key}.boolValue",
                      data_on_change=f"@put('{update_route}/boolValue')")
     elif val_type == "int8Value":
+        sigs = {container_c_id: {entry_e_key: {"int8ValueInvalid": False, "int8Value": stor_val.int8Value}}}
         return Input(type="number",
-                     min=-2**7,
-                     max=2**7 - 1,
-                     data_signals=f"{{'{container_c_id}.{entry_e_key}.int8ValueInvalid': false}}",
+                     min=f"{-2**7}",
+                     max=f"{2**7 - 1}",
+                     data_signals=json.dumps(sigs),
                      data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.int8ValueInvalid}}",
                      data_bind=f"{container_c_id}.{entry_e_key}.int8Value",
                      data_on_change=f"@put('{update_route}/int8Value')")
     elif val_type == "uint8Value":
+        sigs = {container_c_id: {entry_e_key: {"uint8ValueInvalid": False, "uint8Value": stor_val.uint8Value}}}
         return Input(type="number",
-                     min=0,
-                     max=2 ** 8 - 1,
-                     data_signals=f"{{'{container_c_id}.{entry_e_key}.uint8ValueInvalid': false}}",
+                     min="0",
+                     max=f"{2 ** 8 - 1}",
+                     data_signals=json.dumps(sigs),
                      data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.uint8ValueInvalid}}",
                      data_bind=f"{container_c_id}.{entry_e_key}.uint8Value",
                      data_on_change=f"@put('{update_route}/uint8Value')")
     elif val_type == "int16Value":
+        sigs = {container_c_id: {entry_e_key: {"int16ValueInvalid": False, "int16Value": stor_val.int16Value}}}
         return Input(type="number",
-                     min=-2**15,
-                     max=2**15 - 1,
-                     data_signals=f"{{'{container_c_id}.{entry_e_key}.int16ValueInvalid': false}}",
+                     min=f"{-2 ** 15}",
+                     max=f"{2**15 - 1}",
+                     data_signals=json.dumps(sigs),
                      data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.int16ValueInvalid}}",
                      data_bind=f"{container_c_id}.{entry_e_key}.int16Value",
                      data_on_change=f"@put('{update_route}/int16Value')")
     elif val_type == "uint16Value":
+        sigs = {container_c_id: {entry_e_key: {"uint16ValueInvalid": False, "uint16Value": stor_val.uint16Value}}}
         return Input(type="number",
-                     min=0,
-                     max=2**16 - 1,
-                     data_signals=f"{{'{container_c_id}.{entry_e_key}.uint16ValueInvalid': false}}",
+                     min="0",
+                     max=f"{2**16 - 1}",
+                     data_signals=json.dumps(sigs),
                      data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.uint16ValueInvalid}}",
                      data_bind=f"{container_c_id}.{entry_e_key}.uint16Value",
                      data_on_change=f"@put('{update_route}/uint16Value')")
     return Input()
 
+
 if __name__ == "__main__":
-    #via uvicorn
-    config = uvicorn.Config(
-        "storage_service_ui:app",
-        host="127.0.0.1",
-        port=8080,
-        reload=False,
-    )
-    server = uvicorn.Server(config=config)
-    if config.should_reload:
-        sock = config.bind_socket()
-        from uvicorn.supervisors.watchfilesreload import WatchFilesReload as ChangeReload
-        ChangeReload(config, target=server.run, sockets=[sock]).run()
-    else:
-        server.config.setup_event_loop()
-        asyncio.run(capnp.run(server.serve(sockets=None)))
+    use = "hypercorn"
+    #use = "uvicorn"
+    if use == "hypercorn":
+        config = HcConfig()
+        config.bind = ["0.0.0.0:8080"]
+        config.startup_timeout = 1200
+        config.root_path = "/"
+        asyncio.run(capnp.run(hc_serve(app, config)))
+    elif use == "uvicorn":
+        config = uvicorn.Config(
+            "storage_service_ui:app",
+            host="127.0.0.1",
+            port=8080,
+            reload=False,
+        )
+        server = uvicorn.Server(config=config)
+        if config.should_reload:
+            sock = config.bind_socket()
+            from uvicorn.supervisors.watchfilesreload import WatchFilesReload as ChangeReload
+            ChangeReload(config, target=server.run, sockets=[sock]).run()
+        else:
+            server.config.setup_event_loop()
+            asyncio.run(capnp.run(server.serve(sockets=None)))
