@@ -17,6 +17,7 @@ import os
 import sys
 import zalfmas_common.common as mas_common
 import zalfmas_capnp_schemas
+
 sys.path.append(os.path.dirname(zalfmas_capnp_schemas.__file__))
 import climate_capnp
 
@@ -25,7 +26,11 @@ from fasthtml.common import *
 from fasthtml import ft
 import uvicorn
 
-from datastar_py.fasthtml import DatastarResponse, ServerSentEventGenerator as SSE, read_signals
+from datastar_py.fasthtml import (
+    DatastarResponse,
+    ServerSentEventGenerator as SSE,
+    read_signals,
+)
 from datastar_py.consts import ElementPatchMode
 
 app, rt = fast_app(
@@ -46,6 +51,7 @@ example_style = Style(
 
 dyn_routes = []
 
+
 @rt("/")
 async def index():
     now = datetime.isoformat(datetime.now())
@@ -62,11 +68,8 @@ async def index():
                     "Current time from signal: ",
                     Span(data_text="$currentTime")(now),
                 ),
-                Button("press me",
-                       {"data-on-click__once": "@get('/timeseries')"}),
-                Div(id="data", cls="overflow-auto")(
-                    H3("Data")
-                ),
+                Button("press me", {"data-on-click__once": "@get('/timeseries')"}),
+                Div(id="data", cls="overflow-auto")(H3("Data")),
             ),
         ),
     )
@@ -82,28 +85,31 @@ async def clock():
 
 
 @app.get("/updates")
-#@datastar_response
+# @datastar_response
 async def updates(request):
     signals = await read_signals(request)
     print(signals)
     return DatastarResponse(clock())
 
+
 con_man = mas_common.ConnectionManager()
+
+
 async def timeseries2():
     sr = "capnp://localhost:8888/timeseries"
     ts = await con_man.connect(sr, cast_as=climate_capnp.TimeSeries)
     header = await ts.header()
     for h in header.header:
-        yield SSE.patch_elements(Div(h),
-                                 selector="#headers",
-                                 mode=ElementPatchMode.APPEND)
-        #await asyncio.sleep(1)
+        yield SSE.patch_elements(
+            Div(h), selector="#headers", mode=ElementPatchMode.APPEND
+        )
+        # await asyncio.sleep(1)
     data = await ts.data()
     yield SSE.patch_elements(
         Div(id="data")(
             Table(cls="striped")(
                 Thead(*[Th(str(h), scope="col") for h in header.header]),
-                Tbody(id="tbody")
+                Tbody(id="tbody"),
             )
         )
     )
@@ -111,9 +117,9 @@ async def timeseries2():
         row = []
         for i, _ in enumerate(header.header):
             row.append(Td(d[i]))
-        yield SSE.patch_elements(Tr(*row),
-                                 selector="#tbody",
-                                 mode=ElementPatchMode.APPEND)
+        yield SSE.patch_elements(
+            Tr(*row), selector="#tbody", mode=ElementPatchMode.APPEND
+        )
 
 
 @app.get("/timeseries")
@@ -122,21 +128,22 @@ async def timeseries(request):
     print(signals)
     return DatastarResponse(timeseries2())
 
+
 if __name__ == "__main__":
-    #via hypercorn
-    #if False:
+    # via hypercorn
+    # if False:
     #    config = HcConfig()
     #    config.bind = ["0.0.0.0:8080"]
     #    config.startup_timeout = 1200
     #    config.root_path = "/"
     #    asyncio.run(capnp.run(hc_serve(app, config)))
 
-    #via uvicorn directly
-    #if False:
+    # via uvicorn directly
+    # if False:
     #    uvicorn.run("simple:app", host="0.0.0.0", port=8080, reload=True, reload_includes=None,
     #                reload_excludes=None)
 
-    #via uvicorn
+    # via uvicorn
     config = uvicorn.Config(
         "simple:app",
         host="0.0.0.0",
@@ -146,17 +153,20 @@ if __name__ == "__main__":
     server = uvicorn.Server(config=config)
     if config.should_reload:
         sock = config.bind_socket()
-        from uvicorn.supervisors.watchfilesreload import WatchFilesReload as ChangeReload
+        from uvicorn.supervisors.watchfilesreload import (
+            WatchFilesReload as ChangeReload,
+        )
+
         ChangeReload(config, target=server.run, sockets=[sock]).run()
-        #def my_run(sockets):
+        # def my_run(sockets):
         #    server.config.setup_event_loop()
         #    asyncio.run(capnp.run(server.serve(sockets=sockets)))
-        #ChangeReload(config, target=my_run, sockets=[sock]).run()
+        # ChangeReload(config, target=my_run, sockets=[sock]).run()
     else:
         server.config.setup_event_loop()
-        #asyncio.run(server.serve(sockets=None))
+        # asyncio.run(server.serve(sockets=None))
         asyncio.run(capnp.run(server.serve(sockets=None)))
-        #server.run()
+        # server.run()
 
-    #via fasthtml via uvicorn
+    # via fasthtml via uvicorn
     #    serve()
