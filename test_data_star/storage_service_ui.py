@@ -264,10 +264,10 @@ async def get_entry(request, session, container_c_id: str, entry_e_key: str):
 
 @app.put("/containers/{container_c_id}/entries/{entry_e_key}/{value_type}")
 @sse
-async def update_entry(request, session, container_c_id: str, entry_e_key: str, value_type: str):
+async def update_entry(request, session, body, container_c_id: str, entry_e_key: str, value_type: str):
     user_id = session.get("user_id", None)
     if container := get_container_from_user_data(user_id, container_c_id):
-        sigs = await request.json()
+        sigs = json.loads(body)
         css_id = get_css_id_from_user_data(user_id, f"{container_c_id}_{entry_e_key}")
         if new_value := sigs.get(f"value_{css_id}", None):
             try:
