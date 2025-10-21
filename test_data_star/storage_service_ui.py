@@ -1,4 +1,3 @@
-#from aiostream import stream as aios
 import asyncio
 from collections import defaultdict
 import capnp
@@ -18,14 +17,6 @@ import storage_capnp
 
 from hypercorn.asyncio import serve as hc_serve
 from hypercorn.config import Config as HcConfig
-#
-# from datastar_py.fasthtml import (
-#     DatastarResponse,
-#     ServerSentEventGenerator as SSE,
-#     read_signals,
-# )
-# from datastar_py.consts import ElementPatchMode
-# import datastar_py
 from starhtml import *
 
 app, rt = star_app(
@@ -41,124 +32,119 @@ app, rt = star_app(
     # ),
 )
 
-dyn_routes = []
+def empty_user_data():
+    return {
+        "sturdy_ref": "",
+        "cap": None,
+        "containers_loaded": False,
+        "id_to_container_cap": {},
+        "data": defaultdict(dict) # container id to entry id to data
+    }
 
-# @rt("/")
-# def home():
-#     return Div(
-#         H1("StarHTML Demo"),
-#
-#         # Define reactive state with signals
-#         Div(
-#             (counter := Signal("counter", 0)),  # Python-first signal definition
-#
-#             # Reactive UI that updates automatically
-#             P("Count: ", Span(data_text=counter)),
-#             Button("+", data_on_click=counter.add(1)),
-#             Button("Reset", data_on_click=counter.set(0)),
-#
-#             # Conditional styling
-#             data_class_active=counter > 0
-#         ),
-#
-#         # Server-side interactions
-#         Button("Load Data", data_on_click=get("/api/data")),
-#         Div(id="content")
-#     )
+all_user_data = defaultdict(empty_user_data)
+con_man = mas_common.ConnectionManager()
 
-@rt("/api/data")
-def api_data():
-    return Div("Data loaded from server!", id="content")
+def id_from_long_id(user_id: str, long_id: str, prefix=""):
+    user_id = "__no_user_id__" if user_id is None else user_id
+    user_data = all_user_data[user_id]
+    count_ids = user_data.setdefault("long_id_to_count_id", {})
+    if long_id not in count_ids:
+        count = user_data.setdefault("count", 0)
+        user_data["count"] = (count := user_data.get("count", 0) + 1)
+        count_ids[long_id] = f"{prefix}{count}"
+    return count_ids[long_id]
 
-#serve()
 
-connection_invalid = Signal("connection_invalid", False)
-sturdy_ref = Signal("sturdy_ref", "capnp://UsDvHic7pWXb5R7e1HTFwNB5kKhqZEflZp9_Srbjq4Q@10.10.28.186:45195/769e56cf-ddad-4b60-b636-174bf035bc16")
-#data = Signal("data", {"c_1": {"e_1": "bla", "e_2": "bli"}, "c_2": {"e_1": "bla2", "e_2": "bli2"}})
+def get_nested(d: dict, *args):
+    val = d
+    for arg in args:
+        if (val := val.get(arg, None)) is None:
+            return None
+    return val
+
 
 @app.get("/")
-async def index():
-    # return Div(
-    #     H1("StarHTML Demo"),
-    #
-    #     # Define reactive state with signals
-    #     Div(
-    #         (counter := Signal("counter", 0)),  # Python-first signal definition
-    #
-    #         # Reactive UI that updates automatically
-    #         P("Count: ", Span(data_text=counter)),
-    #         Button("+", data_on_click=counter.add(1)),
-    #         Button("Reset", data_on_click=counter.set(0)),
-    #
-    #         # Conditional styling
-    #         data_class_active=counter > 0
-    #     ),
-    #
-    #     # Server-side interactions
-    #     Button("Load Data", data_on_click=get("/api/data")),
-    #     Div(id="content")
-    # )
+async def index(request, session: dict):
+    user_id = session.setdefault("user_id", str(uuid.uuid4()))
+    user_data = all_user_data[user_id]
+    if user_data["cap"]:
+        containers = await list_containers(user_id, user_data["cap"], user_data["id_to_container_cap"])
+    else:
+        containers = [no_container_placeholder()]
     return Div(
         Article(
-            (sr_connected := Signal("sr_connected", False)),
-            connection_invalid,
-            sturdy_ref,
+            (sr_connected := Signal("sr_connected", user_data["cap"] is not None)),
+            (connection_invalid := Signal("connection_invalid", ~sr_connected)),
+            (sturdy_ref := Signal("sturdy_ref", user_data["sturdy_ref"])),
             Fieldset(role="group")(
                 # Label("Sturdy Ref")(
                 Input(
                     placeholder="Enter a Storage Service Sturdy Ref here",
                     data_bind=sturdy_ref,
                     type="text",
-                    data_attr_aria_invalid=connection_invalid, #"{'aria-invalid': $connectionInvalid}",
+                    data_attr_aria_invalid=connection_invalid,
                 ),
                 # Small("Copy here the sturdy ref to your storage service"),
                 # ),
                 Button(
-                    data_text=sr_connected.if_("Connected", "Connect"), #"$sr_connected ? 'Connected' : 'Connect'",
-                    data_on_click=post('/connect'),
+                    data_text=sr_connected.if_("Connected", "Connect"),
+                    data_attr_disabled=sr_connected,
+                    data_on_click=post("/connect"),
+                ),
+                Button("Disconnect",
+                    data_show=sr_connected,
+                    data_on_click=post("/disconnect"),
                 ),
             )
         ),
         Pre(data_json_signals=True),
         Article(id="containers", data_show=sr_connected)(
-            P(id="no_container_placeholder")("no containers available")
+            *containers
         ),
     )
 
+def no_container_placeholder():
+    return P(id="no_container_placeholder")("no containers available")
 
-all_user_data = defaultdict(dict)
-con_man = mas_common.ConnectionManager()
-
+@app.post("/disconnect")
+@sse
+async def disconnect(session: dict):
+    user_id = session.setdefault("user_id", str(uuid.uuid4()))
+    all_user_data[user_id] = empty_user_data()
+    yield signals(sr_connected=False, connection_invalid=True, sturdy_ref="")
+    yield elements(no_container_placeholder(), "#containers", "inner")
 
 @app.post("/connect")
 @sse
 async def connect(request, sturdy_ref: str, session: dict):
     if len(sturdy_ref) == 0:
         yield signals(sr_connected=False, connection_invalid=True)
-        return
-    user_id = session.setdefault("user_id", str(uuid.uuid4()))
-    user_data = all_user_data[user_id]
-    if "sturdy_ref" not in user_data or user_data["sturdy_ref"] != sturdy_ref or "cap" not in user_data:
-        try:
-            cap = await con_man.try_connect(sturdy_ref, cast_as=storage_capnp.Store)
-            user_data["cap"] = cap
-            user_data["id_to_container_cap"] = {}
-            user_data["data"] = defaultdict(dict) # container id to entry id to data
-            yield signals(sr_connected=True, connection_invalid=False)
+        yield elements(no_container_placeholder(), "#containers", "inner")
+    elif user_id := session.get("user_id", None):
+        user_data = all_user_data[user_id]
+        if "sturdy_ref" not in user_data or user_data["sturdy_ref"] != sturdy_ref or "cap" not in user_data:
+            try:
+                cap = await con_man.try_connect(sturdy_ref, cast_as=storage_capnp.Store)
+                user_data["sturdy_ref"] = sturdy_ref
+                user_data["cap"] = cap
+                yield signals(sr_connected=True, connection_invalid=False)
+                user_data["containers_loaded"] = False
+            except capnp.KjException as e:
+                print(e)
+        if not user_data["containers_loaded"]:
+            yield elements(no_container_placeholder(), "#containers", "inner")
             yield elements(None, "#no_container_placeholder", "remove")
-            for el in await list_containers(cap, user_data["id_to_container_cap"]):
+            for el in await list_containers(user_id, user_data["cap"], user_data["id_to_container_cap"]):
                 yield elements(el, "#containers", "append")
-        except capnp.KjException as e:
-            print(e)
+            user_data["containers_loaded"] = True
 
 
-
-async def list_containers(storage_service_cap, id_to_container_cap):
+async def list_containers(user_id, storage_service_cap, id_to_container_cap):
     patches = []
     try:
         cs = (await storage_service_cap.listContainers()).containers
         for c in cs:
-            container_c_id = f"c_{c.id}"
+            container_c_id = id_from_long_id(user_id, c.id, prefix="c_")
             id_to_container_cap[container_c_id] = c.container
             patches.append(
                 Details(
@@ -167,7 +153,7 @@ async def list_containers(storage_service_cap, id_to_container_cap):
                         open=False,
                         data_on_click=get(f"/containers/{container_c_id}"),
                     ),
-                    Article(id=f"{container_c_id}")("-----"),
+                    Article(id=container_c_id)("-----"),
                 )
             )
             patches.append(Hr())
@@ -175,58 +161,58 @@ async def list_containers(storage_service_cap, id_to_container_cap):
         print(e)
     return patches
 
-css_id_count = {"count": 0}
-def get_css_id_from_user_data(user_id, long_id: str):
-    if user_id:
-        user_data = all_user_data[user_id]
-        css_ids = user_data.setdefault("css_ids", {})
-        if long_id in css_ids:
-            return css_ids[long_id]
-        else:
-            css_id_count["count"] += 1
-            css_ids[long_id] = f"id_{css_id_count['count']}"
-            return css_ids[long_id]
-    return None
 
-
-def get_container_from_user_data(user_id, container_c_id):
-    return all_user_data.get(user_id, {}).get("id_to_container_cap", {}).get(container_c_id, None)
+def get_container_cap_from_user_data(user_id, container_c_id):
+    return get_nested(all_user_data, user_id, "id_to_container_cap", container_c_id)
 
 
 @app.get("/containers/{container_c_id}")
 @sse
 async def get_container(request, container_c_id: str, session: dict):
-    user_id = session.get("user_id", None)
-    if ((container := get_container_from_user_data(user_id, container_c_id)) is not None
-            and (data := all_user_data.get(user_id, {}).get("data", None)) is not None):
+    if ((user_id := session.get("user_id", None))
+            and (container := get_container_cap_from_user_data(user_id, container_c_id))
+            and (data := get_nested(all_user_data, user_id, "data")) is not None):
         try:
             entries = (await container.listEntries()).entries
             rows = []
             for entry in entries:
-                css_id = get_css_id_from_user_data(
-                    user_id, f"{container_c_id}_e_{entry.key}"
-                )
-                entry_e_key = f"e_{entry.key}"
-                data[container_c_id][entry_e_key] = {"edit_id": f"edit_{css_id}", "delete_id": f"delete_{css_id}"}
+                entry_e_id = id_from_long_id(user_id, entry.key, prefix="e_")
+                data[container_c_id][entry_e_id] = {
+                    "key": entry.key,
+                }
                 rows.append(
                     Tr(
-                        id=f"delete_{css_id}",
+                        id=f"{container_c_id}_{entry_e_id}",
                     )(
                         Td(entry.key),
-                        Td(id=f"edit_{css_id}")("---"),
+                        Td(id=f"value_{container_c_id}_{entry_e_id}")("---"),
                         Td()(
                             Button(
+                                (show_cancel := Signal(f"{container_c_id}_{entry_e_id}_show_cancel", False)),
                                 "Edit",
-                                data_on_click=get(f"/containers/{container_c_id}/entries/{entry_e_key}", edit_id=css_id),
+                                data_show=~show_cancel,
+                                data_on_click=[get(f"/containers/{container_c_id}/entries/{entry_e_id}?edit=true"),
+                                               show_cancel.toggle()],
+                            ),
+                            Button(
+                                "Cancel",
+                                data_show=show_cancel,
+                                data_on_click=[get(f"/containers/{container_c_id}/entries/{entry_e_id}?edit=false"),
+                                               show_cancel.toggle()],
+                            ),
+                            Input(
+                                (del_activated := Signal(f"{container_c_id}_{entry_e_id}_del_activated", False)),
+                                type="checkbox",
+                                data_bind=del_activated,
                             ),
                             Button(
                                 "Delete",
-                                data_on_click=delete(f"/containers/{container_c_id}/entries/{entry_e_key}", delete_id=css_id),
+                                data_attr_disabled=~del_activated,
+                                data_on_click=delete(f"/containers/{container_c_id}/entries/{entry_e_id}"),
                             ),
                         ),
                     )
                 )
-            #yield signals(data=user_data["data"])
             yield elements(
                 Table(cls="striped")(
                     Thead(Tr(Th("Key"), Th("Value"), Th("Actions"))), Tbody(*rows)
@@ -238,134 +224,170 @@ async def get_container(request, container_c_id: str, session: dict):
             print(e)
 
 
-@app.get("/containers/{container_c_id}/entries/{entry_e_key}")
+
+@app.get("/containers/{container_c_id}/entries/{entry_e_id}")
 @sse
-async def get_entry(request, session, container_c_id: str, entry_e_key: str):
-    user_id = session.get("user_id", None)
-    if (container := get_container_from_user_data(user_id, container_c_id)):
+async def get_entry(request, session, container_c_id: str, entry_e_id: str, edit: bool):
+    if ((user_id := session.get("user_id", None))
+            and (container := get_container_cap_from_user_data(user_id, container_c_id))
+            and (e_data := get_nested(all_user_data, user_id, "data", container_c_id, entry_e_id))):
         try:
-            v = await container.getEntry(entry_e_key[2:]).entry.getValue()
-            css_id = get_css_id_from_user_data(user_id, f"{container_c_id}_{entry_e_key}")
-            yield elements(
-                storage_input_field(
-                    container_c_id,
-                    entry_e_key,
-                    f"/containers/{container_c_id}/entries/{entry_e_key}",
-                    v.value,
-                    v.isUnset,
-                    css_id
-                ),
-                f"#edit_{css_id}",
-                "inner",
-            )
+            v = await container.getEntry(e_data["key"]).entry.getValue()
+            if edit:
+                yield elements(
+                    storage_input_field(
+                        container_c_id,
+                        entry_e_id,
+                        f"/containers/{container_c_id}/entries/{entry_e_id}",
+                        v.value,
+                        v.isUnset
+                    ),
+                    f"#value_{container_c_id}_{entry_e_id}",
+                    "inner",
+                )
+            else:
+                yield elements(Td(f"{v.value.__getattr__(v.value.which())}"),
+                               f"#value_{container_c_id}_{entry_e_id}",
+                               "inner")
         except capnp.KjException as e:
             print(e)
 
 
-@app.put("/containers/{container_c_id}/entries/{entry_e_key}/{value_type}")
+@app.put("/containers/{container_c_id}/entries/{entry_e_id}/{value_type}")
 @sse
-async def update_entry(request, session, body, container_c_id: str, entry_e_key: str, value_type: str):
-    user_id = session.get("user_id", None)
-    if container := get_container_from_user_data(user_id, container_c_id):
+async def update_entry(request, session, body, container_c_id: str, entry_e_id: str, value_type: str):
+    if ((user_id := session.get("user_id", None))
+        and (container := get_container_cap_from_user_data(user_id, container_c_id))
+        and (e_data := get_nested(all_user_data, user_id, "data", container_c_id, entry_e_id))):
         sigs = json.loads(body)
-        css_id = get_css_id_from_user_data(user_id, f"{container_c_id}_{entry_e_key}")
-        if new_value := sigs.get(f"value_{css_id}", None):
+        if new_value := sigs.get(f"value_{container_c_id}_{entry_e_id}", None):
             try:
-                entry_prom = container.getEntry(entry_e_key).entry
+                entry_prom = container.getEntry(e_data["key"]).entry
                 success = await entry_prom.setValue({value_type: new_value})
-                if success:
-                    yield elements(Td(f"{new_value}"), f"#edit_{css_id}", "inner")
+                if success.success:
+                    yield elements(Td(f"{new_value}"),
+                                   f"#value_{container_c_id}_{entry_e_id}",
+                                   "inner")
             except capnp.KjException as e:
                 print(e)
+
+@app.delete("/containers/{container_c_id}/entries/{entry_e_id}")
+@sse
+async def delete_entry(request, session, container_c_id: str, entry_e_id: str):
+    if ((user_id := session.get("user_id", None))
+            and (container := get_container_cap_from_user_data(user_id, container_c_id))
+            and (e_data := get_nested(all_user_data, user_id, "data", container_c_id, entry_e_id))):
+        try:
+            res = await container.removeEntry(e_data["key"])
+            if res.success:
+                yield elements(None, f"#{container_c_id}_{entry_e_id}", "remove")
+        except capnp.KjException as e:
+            print(e)
 
 
 def storage_input_field(
     container_c_id,
-    entry_e_key,
+    entry_e_id,
     update_route: str,
     stor_val: storage_capnp.Store.Container.Entry.Value,
     is_unset: bool,
-    css_id: str,
 ):
     val_type = stor_val.which()
     if val_type == "boolValue":
         return Input(
-            #(value_invalid := Signal("bool_value_invalid", is_unset, namespace=f"{container_c_id}_{entry_e_key}")),
-            #(value := Signal("bool_value", stor_val.boolValue, namespace=f"{container_c_id}_{entry_e_key}")),
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.boolValue)),
             type="checkbox",
-            data_attr_aria_invalid=value(is_unset),#value_invalid,
-            data_bind=Signal(f"value_{css_id}", stor_val.boolValue),
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
             data_on_change=put(f"{update_route}/boolValue"),
         )
     elif val_type == "int8Value":
-        sigs = {
-            container_c_id: {
-                entry_e_key: {
-                    "int8ValueInvalid": False,
-                    "int8Value": stor_val.int8Value,
-                }
-            }
-        }
         return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.int8Value)),
             type="number",
             min=f"{-(2**7)}",
             max=f"{2**7 - 1}",
-            data_signals=json.dumps(sigs),
-            data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.int8ValueInvalid}}",
-            data_bind=f"{container_c_id}.{entry_e_key}.int8Value",
-            data_on_change=f"@put('{update_route}/int8Value')",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/int8Value"),
         )
     elif val_type == "uint8Value":
-        sigs = {
-            container_c_id: {
-                entry_e_key: {
-                    "uint8ValueInvalid": False,
-                    "uint8Value": stor_val.uint8Value,
-                }
-            }
-        }
         return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.uint8Value)),
             type="number",
             min="0",
             max=f"{2**8 - 1}",
-            data_signals=json.dumps(sigs),
-            data_attr=f"{{'aria-invalid': ${container_c_id}.{entry_e_key}.uint8ValueInvalid}}",
-            data_bind=f"{container_c_id}.{entry_e_key}.uint8Value",
-            data_on_change=f"@put('{update_route}/uint8Value')",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/uint8Value"),
         )
     elif val_type == "int16Value":
-        # sigs = {
-        #     container_c_id: {
-        #         entry_e_key: {
-        #             "int16ValueInvalid": False,
-        #             "int16Value": stor_val.int16Value,
-        #         }
-        #     }
-        # }
         return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.int16Value)),
             type="number",
             min=f"{-(2**15)}",
             max=f"{2**15 - 1}",
             data_attr_aria_invalid=value(is_unset),
-            data_bind=Signal(f"value_{css_id}", stor_val.int16Value),
+            data_bind=val,
             data_on_change=put(f"{update_route}/int16Value"),
         )
     elif val_type == "uint16Value":
-        # sigs = {
-        #     container_c_id: {
-        #         entry_e_key: {
-        #             "uint16ValueInvalid": False,
-        #             "uint16Value": stor_val.uint16Value,
-        #         }
-        #     }
-        # }
         return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.uint16Value)),
             type="number",
             min="0",
             max=f"{2**16 - 1}",
             data_attr_aria_invalid=value(is_unset),
-            data_bind=Signal(f"value_{css_id}", stor_val.uint16Value),
+            data_bind=val,
             data_on_change=put(f"{update_route}/uint16Value"),
+        )
+    elif val_type == "int32Value":
+        return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.int32Value)),
+            type="number",
+            min=f"{-(2**31)}",
+            max=f"{2**31 - 1}",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/int32Value"),
+        )
+    elif val_type == "uint32Value":
+        return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.uint32Value)),
+            type="number",
+            min="0",
+            max=f"{2**32 - 1}",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/uint32Value"),
+        )
+    elif val_type == "int64Value":
+        return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.int64Value)),
+            type="number",
+            min=f"{-(2**63)}",
+            max=f"{2**63 - 1}",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/int64Value"),
+        )
+    elif val_type == "uint64Value":
+        return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.uint64Value)),
+            type="number",
+            min="0",
+            max=f"{2**64 - 1}",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/uint64Value"),
+        )
+    elif val_type == "textValue":
+        return Input(
+            (val := Signal(f"value_{container_c_id}_{entry_e_id}", stor_val.textValue)),
+            type="text",
+            data_attr_aria_invalid=value(is_unset),
+            data_bind=val,
+            data_on_change=put(f"{update_route}/textValue"),
         )
     return Input()
 
